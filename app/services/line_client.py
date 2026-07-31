@@ -100,6 +100,7 @@ class LineClient:
                 json=payload,
             )
             response.raise_for_status()
+
     async def reply_flex(
         self,
         reply_token: str,
@@ -136,7 +137,7 @@ class LineClient:
     
             if response.is_error:
                 print(
-                    "LINE Flex response:",
+                    "LINE Flex API error:",
                     response.status_code,
                     response.text,
                 )

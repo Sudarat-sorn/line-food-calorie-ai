@@ -19,7 +19,10 @@ from app.dependencies import (
     get_line_channel_secret,
     get_line_client,
 )
-from app.formatters import build_food_analysis_flex
+from app.formatters import (
+    build_food_analysis_flex,
+    format_food_analysis,
+)
 from app.models import FoodAnalysis
 from app.security import verify_line_signature
 from app.services.food_analyzer import FoodAnalyzer
@@ -126,14 +129,19 @@ async def process_line_event(
     if not reply_token:
         return
 
+    # ผู้ใช้ส่งข้อความประเภทอื่นที่ไม่ใช่รูป
     if message.get("type") != "image":
-        await line_client.reply_text(
-            reply_token=reply_token,
-            text=(
-                "กรุณาส่งรูปอาหารหนึ่งจาน "
-                "เพื่อให้ AI ประเมินแคลอรีครับ 🍽"
-            ),
-        )
+        try:
+            await line_client.reply_text(
+                reply_token=reply_token,
+                text=(
+                    "กรุณาส่งรูปอาหารหนึ่งจาน "
+                    "เพื่อให้ AI ประเมินแคลอรีครับ 🍽"
+                ),
+            )
+        except Exception as error:
+            print(f"LINE text reply error: {error}")
+
         return
 
     message_id = message.get("id")
@@ -141,77 +149,77 @@ async def process_line_event(
     if not message_id:
         return
 
-    if (
-        source_type == "user"
-        and user_id
-    ):
+    # แสดง Loading Animation เฉพาะแชตส่วนตัว
+    if source_type == "user" and user_id:
         try:
             await line_client.start_loading(
                 user_id=user_id,
                 loading_seconds=60,
             )
         except Exception as error:
+            # Loading ไม่สำเร็จก็ยังวิเคราะห์ต่อ
             print(f"LINE loading error: {error}")
 
-        try:
-            image_bytes, mime_type = (
-                await line_client.get_message_content(
-                    message_id=message_id,
-                )
+    try:
+        image_bytes, mime_type = (
+            await line_client.get_message_content(
+                message_id=message_id,
             )
+        )
 
-            if mime_type not in SUPPORTED_IMAGE_TYPES:
-                await line_client.reply_text(
-                    reply_token=reply_token,
-                    text=(
-                        "รูปแบบไฟล์นี้ยังไม่รองรับ "
-                        "กรุณาส่งรูป JPG, PNG หรือ WEBP"
-                    ),
-                )
-                return
-
-            analysis = await run_in_threadpool(
-                analyzer.analyze,
-                image_bytes,
-                mime_type,
+        if mime_type not in SUPPORTED_IMAGE_TYPES:
+            await line_client.reply_text(
+                reply_token=reply_token,
+                text=(
+                    "รูปแบบไฟล์นี้ยังไม่รองรับ "
+                    "กรุณาส่งรูป JPG, PNG หรือ WEBP"
+                ),
             )
-
-        except Exception as error:
-            print(f"LINE image analysis error: {error}")
-
-            try:
-                await line_client.reply_text(
-                    reply_token=reply_token,
-                    text=(
-                        "ขออภัย ไม่สามารถวิเคราะห์รูปนี้ได้ "
-                        "กรุณาลองส่งรูปอาหารที่ชัดเจนอีกครั้ง"
-                    ),
-                )
-            except Exception as reply_error:
-                print(
-                    f"LINE error reply failed: {reply_error}"
-                )
-
             return
 
-        flex_contents = build_food_analysis_flex(
-            analysis
+        analysis = await run_in_threadpool(
+            analyzer.analyze,
+            image_bytes,
+            mime_type,
         )
 
-        alt_text = (
-            f"{analysis.dish_name}: "
-            f"{analysis.total_calories_min:.0f}-"
-            f"{analysis.total_calories_max:.0f} kcal"
-        )
+    except Exception as error:
+        print(f"LINE image analysis error: {error}")
 
         try:
-            await line_client.reply_flex(
+            await line_client.reply_text(
                 reply_token=reply_token,
-                alt_text=alt_text,
-                contents=flex_contents,
+                text=(
+                    "ขออภัย ไม่สามารถวิเคราะห์รูปนี้ได้ "
+                    "กรุณาลองส่งรูปอาหารที่ชัดเจนอีกครั้ง"
+                ),
             )
-        except Exception as error:
-            print(f"LINE Flex reply error: {error}")
+        except Exception as reply_error:
+            print(
+                "LINE error message failed:",
+                reply_error,
+            )
+
+        return
+
+    flex_contents = build_food_analysis_flex(
+        analysis
+    )
+
+    alt_text = (
+        f"{analysis.dish_name}: "
+        f"{analysis.total_calories_min:.0f}-"
+        f"{analysis.total_calories_max:.0f} kcal"
+    )
+
+    try:
+        await line_client.reply_flex(
+            reply_token=reply_token,
+            alt_text=alt_text,
+            contents=flex_contents,
+        )
+    except Exception as error:
+        print(f"LINE Flex reply error: {error}")
 @app.post("/webhook")
 async def line_webhook(
     request: Request,
