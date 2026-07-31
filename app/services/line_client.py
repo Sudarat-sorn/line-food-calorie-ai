@@ -100,3 +100,45 @@ class LineClient:
                 json=payload,
             )
             response.raise_for_status()
+    async def reply_flex(
+        self,
+        reply_token: str,
+        alt_text: str,
+        contents: dict,
+    ) -> None:
+        url = (
+            f"{LINE_API_BASE_URL}"
+            "/v2/bot/message/reply"
+        )
+    
+        payload = {
+            "replyToken": reply_token,
+            "messages": [
+                {
+                    "type": "flex",
+                    "altText": alt_text[:1500],
+                    "contents": contents,
+                }
+            ],
+        }
+    
+        async with httpx.AsyncClient(
+            timeout=30.0
+        ) as client:
+            response = await client.post(
+                url,
+                headers={
+                    **self.headers,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+    
+            if response.is_error:
+                print(
+                    "LINE Flex response:",
+                    response.status_code,
+                    response.text,
+                )
+    
+            response.raise_for_status()

@@ -19,7 +19,7 @@ from app.dependencies import (
     get_line_channel_secret,
     get_line_client,
 )
-from app.formatters import format_food_analysis
+from app.formatters import build_food_analysis_flex
 from app.models import FoodAnalysis
 from app.security import verify_line_signature
 from app.services.food_analyzer import FoodAnalyzer
@@ -153,49 +153,65 @@ async def process_line_event(
         except Exception as error:
             print(f"LINE loading error: {error}")
 
-    try:
-        image_bytes, mime_type = (
-            await line_client.get_message_content(
-                message_id=message_id,
+        try:
+            image_bytes, mime_type = (
+                await line_client.get_message_content(
+                    message_id=message_id,
+                )
             )
-        )
 
-        if mime_type not in SUPPORTED_IMAGE_TYPES:
-            await line_client.reply_text(
-                reply_token=reply_token,
-                text=(
-                    "รูปแบบไฟล์นี้ยังไม่รองรับ "
-                    "กรุณาส่งรูป JPG, PNG หรือ WEBP"
-                ),
+            if mime_type not in SUPPORTED_IMAGE_TYPES:
+                await line_client.reply_text(
+                    reply_token=reply_token,
+                    text=(
+                        "รูปแบบไฟล์นี้ยังไม่รองรับ "
+                        "กรุณาส่งรูป JPG, PNG หรือ WEBP"
+                    ),
+                )
+                return
+
+            analysis = await run_in_threadpool(
+                analyzer.analyze,
+                image_bytes,
+                mime_type,
             )
+
+        except Exception as error:
+            print(f"LINE image analysis error: {error}")
+
+            try:
+                await line_client.reply_text(
+                    reply_token=reply_token,
+                    text=(
+                        "ขออภัย ไม่สามารถวิเคราะห์รูปนี้ได้ "
+                        "กรุณาลองส่งรูปอาหารที่ชัดเจนอีกครั้ง"
+                    ),
+                )
+            except Exception as reply_error:
+                print(
+                    f"LINE error reply failed: {reply_error}"
+                )
+
             return
 
-        analysis = await run_in_threadpool(
-            analyzer.analyze,
-            image_bytes,
-            mime_type,
-        )
-
-        reply_message = format_food_analysis(
+        flex_contents = build_food_analysis_flex(
             analysis
         )
 
-    except Exception as error:
-        print(f"LINE image analysis error: {error}")
-
-        reply_message = (
-            "ขออภัย ไม่สามารถวิเคราะห์รูปนี้ได้ "
-            "กรุณาลองส่งรูปอาหารที่ชัดเจนอีกครั้ง"
+        alt_text = (
+            f"{analysis.dish_name}: "
+            f"{analysis.total_calories_min:.0f}-"
+            f"{analysis.total_calories_max:.0f} kcal"
         )
 
-    try:
-        await line_client.reply_text(
-            reply_token=reply_token,
-            text=reply_message,
-        )
-    except Exception as error:
-        print(f"LINE reply error: {error}")
-
+        try:
+            await line_client.reply_flex(
+                reply_token=reply_token,
+                alt_text=alt_text,
+                contents=flex_contents,
+            )
+        except Exception as error:
+            print(f"LINE Flex reply error: {error}")
 @app.post("/webhook")
 async def line_webhook(
     request: Request,
