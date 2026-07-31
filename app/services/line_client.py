@@ -14,6 +14,34 @@ class LineClient:
             "Authorization": f"Bearer {access_token}",
         }
 
+    async def start_loading(
+        self,
+        user_id: str,
+        loading_seconds: int = 60,
+    ) -> None:
+        url = (
+            f"{LINE_API_BASE_URL}"
+            "/v2/bot/chat/loading/start"
+        )
+
+        payload = {
+            "chatId": user_id,
+            "loadingSeconds": loading_seconds,
+        }
+
+        async with httpx.AsyncClient(
+            timeout=10.0
+        ) as client:
+            response = await client.post(
+                url,
+                headers={
+                    **self.headers,
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+
     async def get_message_content(
         self,
         message_id: str,

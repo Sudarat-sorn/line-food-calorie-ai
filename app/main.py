@@ -118,6 +118,10 @@ async def process_line_event(
 
     reply_token = event.get("replyToken")
     message = event.get("message", {})
+    source = event.get("source", {})
+
+    user_id = source.get("userId")
+    source_type = source.get("type")
 
     if not reply_token:
         return
@@ -136,6 +140,18 @@ async def process_line_event(
 
     if not message_id:
         return
+
+    if (
+        source_type == "user"
+        and user_id
+    ):
+        try:
+            await line_client.start_loading(
+                user_id=user_id,
+                loading_seconds=60,
+            )
+        except Exception as error:
+            print(f"LINE loading error: {error}")
 
     try:
         image_bytes, mime_type = (
