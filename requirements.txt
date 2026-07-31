@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+google-genai
+python-dotenv
+line-bot-sdk
+httpx
+pillow
+python-multipart
+pytest
