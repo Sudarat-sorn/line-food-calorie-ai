@@ -116,7 +116,10 @@ async def process_line_event(
     analyzer: FoodAnalyzer,
     line_client: LineClient,
 ) -> None:
+    print("STEP 1: process_line_event started")
+
     if event.get("type") != "message":
+        print("SKIP: not message event")
         return
 
     reply_token = event.get("replyToken")
@@ -126,56 +129,113 @@ async def process_line_event(
     user_id = source.get("userId")
     source_type = source.get("type")
 
+    print(
+        "Message type:",
+        message.get("type"),
+    )
+
     if not reply_token:
+        print("ERROR: reply token missing")
         return
 
-    # ผู้ใช้ส่งข้อความประเภทอื่นที่ไม่ใช่รูป
+    # ----------------------------
+    # ไม่ใช่รูป
+    # ----------------------------
     if message.get("type") != "image":
-        try:
-            await line_client.reply_text(
-                reply_token=reply_token,
-                text=(
-                    "กรุณาส่งรูปอาหารหนึ่งจาน "
-                    "เพื่อให้ AI ประเมินแคลอรีครับ 🍽"
-                ),
-            )
-        except Exception as error:
-            print(f"LINE text reply error: {error}")
-
+        await line_client.reply_text(
+            reply_token=reply_token,
+            text=(
+                "กรุณาส่งรูปอาหารหนึ่งจาน "
+                "เพื่อให้ AI ประเมินแคลอรีครับ 🍽"
+            ),
+        )
         return
 
     message_id = message.get("id")
 
     if not message_id:
+        print("ERROR: message id missing")
         return
 
-    # แสดง Loading Animation เฉพาะแชตส่วนตัว
+    # ----------------------------
+    # Loading
+    # ----------------------------
     if source_type == "user" and user_id:
         try:
+            print("STEP 2: starting loading animation")
+
             await line_client.start_loading(
                 user_id=user_id,
                 loading_seconds=60,
             )
-        except Exception as error:
-            # Loading ไม่สำเร็จก็ยังวิเคราะห์ต่อ
-            print(f"LINE loading error: {error}")
 
+            print("STEP 2 OK: loading started")
+
+        except Exception as error:
+            print(
+                "LOADING ERROR:",
+                type(error).__name__,
+                repr(error),
+            )
+
+    # ----------------------------
+    # Download รูปจาก LINE
+    # ----------------------------
     try:
+        print("STEP 3: downloading LINE image")
+
         image_bytes, mime_type = (
             await line_client.get_message_content(
                 message_id=message_id,
             )
         )
 
-        if mime_type not in SUPPORTED_IMAGE_TYPES:
-            await line_client.reply_text(
-                reply_token=reply_token,
-                text=(
-                    "รูปแบบไฟล์นี้ยังไม่รองรับ "
-                    "กรุณาส่งรูป JPG, PNG หรือ WEBP"
-                ),
-            )
-            return
+        print(
+            "STEP 3 OK:",
+            "bytes=",
+            len(image_bytes),
+            "mime=",
+            mime_type,
+        )
+
+    except Exception as error:
+        print(
+            "IMAGE DOWNLOAD ERROR:",
+            type(error).__name__,
+            repr(error),
+        )
+
+        await line_client.reply_text(
+            reply_token=reply_token,
+            text=(
+                "ขออภัย ระบบไม่สามารถดาวน์โหลดรูปจาก LINE ได้"
+            ),
+        )
+        return
+
+    # ----------------------------
+    # ตรวจ MIME
+    # ----------------------------
+    if mime_type not in SUPPORTED_IMAGE_TYPES:
+        print(
+            "UNSUPPORTED MIME:",
+            mime_type,
+        )
+
+        await line_client.reply_text(
+            reply_token=reply_token,
+            text=(
+                f"รูปแบบไฟล์ {mime_type} ยังไม่รองรับ "
+                "กรุณาส่ง JPG, PNG หรือ WEBP"
+            ),
+        )
+        return
+
+    # ----------------------------
+    # Gemini
+    # ----------------------------
+    try:
+        print("STEP 4: sending image to Gemini")
 
         analysis = await run_in_threadpool(
             analyzer.analyze,
@@ -183,29 +243,61 @@ async def process_line_event(
             mime_type,
         )
 
+        print(
+            "STEP 4 OK:",
+            analysis.dish_name,
+        )
+
     except Exception as error:
-        print(f"LINE image analysis error: {error}")
+        print(
+            "GEMINI ERROR:",
+            type(error).__name__,
+            repr(error),
+        )
 
-        try:
-            await line_client.reply_text(
-                reply_token=reply_token,
-                text=(
-                    "ขออภัย ไม่สามารถวิเคราะห์รูปนี้ได้ "
-                    "กรุณาลองส่งรูปอาหารที่ชัดเจนอีกครั้ง"
-                ),
-            )
-        except Exception as reply_error:
-            print(
-                "LINE error message failed:",
-                reply_error,
-            )
-
+        await line_client.reply_text(
+            reply_token=reply_token,
+            text=(
+                "ขออภัย AI ไม่สามารถวิเคราะห์รูปอาหารได้ "
+                "กรุณาลองใหม่อีกครั้ง"
+            ),
+        )
         return
 
-    flex_contents = build_food_analysis_flex(
-        analysis
-    )
+    # ----------------------------
+    # สร้าง Flex JSON
+    # ----------------------------
+    try:
+        print("STEP 5: building Flex Message")
 
+        flex_contents = build_food_analysis_flex(
+            analysis
+        )
+
+        print("STEP 5 OK: Flex Message built")
+
+    except Exception as error:
+        print(
+            "FLEX BUILD ERROR:",
+            type(error).__name__,
+            repr(error),
+        )
+
+        await line_client.reply_text(
+            reply_token=reply_token,
+            text=(
+                f"{analysis.dish_name}\n"
+                f"ประมาณ "
+                f"{analysis.total_calories_min:.0f}-"
+                f"{analysis.total_calories_max:.0f} kcal\n\n"
+                "วิเคราะห์สำเร็จ แต่สร้างการ์ด Flex ไม่สำเร็จ"
+            ),
+        )
+        return
+
+    # ----------------------------
+    # ส่ง Flex
+    # ----------------------------
     alt_text = (
         f"{analysis.dish_name}: "
         f"{analysis.total_calories_min:.0f}-"
@@ -213,13 +305,23 @@ async def process_line_event(
     )
 
     try:
+        print("STEP 6: sending Flex Message")
+
         await line_client.reply_flex(
             reply_token=reply_token,
             alt_text=alt_text,
             contents=flex_contents,
         )
+
+        print("STEP 6 OK: Flex Message sent")
+
     except Exception as error:
-        print(f"LINE Flex reply error: {error}")
+        print(
+            "FLEX SEND ERROR:",
+            type(error).__name__,
+            repr(error),
+        )
+        
 @app.post("/webhook")
 async def line_webhook(
     request: Request,
